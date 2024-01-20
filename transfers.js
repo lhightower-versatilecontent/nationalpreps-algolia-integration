@@ -4,6 +4,10 @@ const { createClient } = require('@supabase/supabase-js');
 const sburl = "https://ktbibwgpjxgqhgsovoec.supabase.co"
 const key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt0Ymlid2dwanhncWhnc292b2VjIiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTA0OTU0MTEsImV4cCI6MjAwNjA3MTQxMX0.WTJOY5lb-7MwZX4gHOqpYwkKoZOBfRl5uveu6DFmwOM"
 
+function convertDateTimeToUnix(dateTimeString) {
+    const unixTime = new Date(dateTimeString).getTime() / 1000; // Divide by 1000 to get seconds
+    return unixTime;
+}
 // Search-only version
 // import algoliasearch from 'algoliasearch/lite';
 async function uploadData() {
@@ -12,64 +16,66 @@ async function uploadData() {
 
     const supabaseClient = createClient(sburl, key);
     const athletes = [];
-    const schools = [];
-
-   
 
     const { data: teams, error: teamsError } = await supabaseClient
         .from('Team')
-        .select()
+        .select('*,College(*,Conference(name, conferenceDivisionId))');
+
 
     if (!teamsError) {
-
         const { data, error } = await supabaseClient
             .from('Athlete')
-            .select('*,HighSchool(*),AthleteType(*)')
-            .eq('rank','7 Transfer Portal')
-            .limit(10)
+            .select()
+            .eq('rank', '7 Transfer Portal')
+
         if (!error) {
-            //console.log(JSON.stringify(data[0].HighSchool.highschoolStateId))
-
             data.map((d) => {
-                let location = '';
-
-                if (d.HighSchool) {
-                    location = d.HighSchool ? d.HighSchool.highschoolStateId : d.athleteStateId ? d.athleteStateId : 'N/A';
-                }
-                else {
-                    location = d.city ? d.city + ", " : '';
-                    location += d.athleteStateId ? d.athleteStateId : ''
-                }
-            
-                if (d.rank === '7 Transfer Portal') {
-                    d.AthleteType.type = 'Transfer Portal';
-                }
+                let displayLocation = d.city ? d.city + ", " : '';
+                displayLocation += d.athleteStateId ? d.athleteStateId : ''
+                let location = d.athleteStateId ? d.athleteStateId : 'Unknown';
                 let teamId = 0;
                 let committedTeam = {};
+                let committedConference = '';
+                let exitingConference = '';
+                let committedDivision = '';
+                let exitingDivision = '';
                 let exitingTeam = {};
                 let offerTeams = [];
                 let enteredPortalDate = '';
                 let committedDate = '';
                 let offerTeam = {};
+                let committed = false;
+                let mostRecentInteraction = null;
+
+                let aryInteractions = {};
 
                 if (d.interactions && d.interactions.length > 0) {
-                    const aryInteractions = d.interactions.map(JSON.parse);
+                    aryInteractions = d.interactions;
+
+                    // Finding the object with the most recent interactionDate
+                    mostRecentInteraction = aryInteractions.reduce((prev, current) =>
+                        new Date(prev.interactionDate) > new Date(current.interactionDate) ? prev : current
+                    );
+
                     const c = aryInteractions.find(x => x.interactionType === 4)
                     if (c) {
-                        
+
                         teamId = c.teamId;
                         committedTeam = teams.find(x => x.id === teamId)
                         committedDate = c.interactionDate;
+                        committedConference = committedTeam?.College?.Conference?.name;
+                        committedDivision = committedTeam?.College?.Conference?.conferenceDivisionId;
+                        committed = true;
                     }
-                    console.log('commitDate', committedDate)
 
                     const e = aryInteractions.find(x => x.interactionType === 6)
                     if (e) {
                         teamId = e.teamId;
                         exitingTeam = teams.find(x => x.id === teamId)
                         enteredPortalDate = e.interactionDate;
+                        exitingConference = exitingTeam?.College?.Conference?.name;
+                        exitingDivision = exitingTeam?.College?.Conference?.conferenceDivisionId;
                     }
-                    console.log(enteredPortalDate)
 
                     const o = aryInteractions.filter(x => x.interactionType === 2)
                     if (aryInteractions && aryInteractions.length > 0 && o && o.length > 0) {
@@ -84,36 +90,39 @@ async function uploadData() {
 
                 const addAthlete = {
                     objectID: d.id,
+                    enteredPortalDate: enteredPortalDate,
                     fname: d.fname,
                     lname: d.lname,
+                    name: d.fname + " " + d.lname,
+                    graduatingYear: d.graduatingYear,
+                    athleteType: 'Transfer Portal',
                     twitterHandle: d.twitterHandle,
                     instagramHandle: d.instagramHandle,
-                    offPosition: d.offPosition,
-                    defPosition: d.defPosition,
-                    stPosition: d.stPosition,
-                    scoutPosition: d.scoutPosition,
-                    name: d.fname + " " + d.lname,
+                    position: d.offPosition,
                     inches: d.heightFeet ? (d.heightFeet * 12) + (d.heightInches) : 0,
                     height: d.heightFeet + "' " + d.heightInches + "\"",
                     weight: d.weight,
                     location: location,
-                    county: d.HighSchool ? d.HighSchool.county : 'Unknown',
-                    highschoolDisplay: d.HighSchool ? d.HighSchool.name + ' (' + d.HighSchool.city + ', ' + d.HighSchool.highschoolStateId + ')' : '',
-                    GPA: d.GPA && d.GPA != null && d.GPA != '' ? d.GPA : '0',
-                    ACT: d.ACT && d.ACT != null && d.ACT != '' ? d.ACT : '0',
-                    SAT: d.SAT && d.SAT != null && d.SAT != '' ? d.SAT : '0',
-                    athleteType: d.AthleteType.type,
-                    rank: d.rank ? d.rank : 'Unknown',
+                    displayLocation: displayLocation,
                     committedTeam: committedTeam,
                     committedDate: committedDate,
-                    enteredPortalDate: enteredPortalDate,
-                    offers: offerTeams
+                    exitTeam: exitingTeam,
+                    offers: offerTeams ? offerTeams.length : 0,
+                    interactions: aryInteractions,
+                    committed: committed,
+                    committedConference: committedConference,
+                    committedDivision: committedDivision?.toUpperCase(),
+                    exitingConference: exitingConference,
+                    exitingDivision: exitingDivision?.toUpperCase(),
+                    lastInteractionDate: mostRecentInteraction?.interactionDate,
+                    image: d.image,
+                    status: committed ? 'Committed' : 'Undecided'
                 }
 
                 athletes.push(addAthlete);
             })
 
-            //index.saveObjects(athletes, { autoGenerateObjectIDIfNotExist: true });
+            index.saveObjects(athletes, { autoGenerateObjectIDIfNotExist: true });
         }
         else {
             console.log('error: ', JSON.stringify(error))
